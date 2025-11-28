@@ -5,36 +5,50 @@ import string
 from datetime import datetime, timedelta
 import os
 
+# ===========================
+# Конфигурация
+# ===========================
 KEYS_FILE = "keys.json"
-ADMIN_SECRET = os.getenv("ADMIN_SECRET", "supersecret123")
+# Получаем секрет из переменной окружения (Render задаёт её в Dashboard)
+ADMIN_SECRET = os.getenv("ADMIN_SECRET", "fallback_secret_do_not_use_in_prod")
 
 def load_keys():
     if os.path.exists(KEYS_FILE):
-        with open(KEYS_FILE, "r") as f:
+        with open(KEYS_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     return {}
 
 def save_keys(keys):
-    with open(KEYS_FILE, "w") as f:
-        json.dump(keys, f, indent=2)
+    with open(KEYS_FILE, "w", encoding="utf-8") as f:
+        json.dump(keys, f, indent=2, ensure_ascii=False)
 
 def generate_key():
     parts = [''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(4)) for _ in range(3)]
     return "SHARK-" + "-".join(parts)
 
+# ===========================
+# Flask App
+# ===========================
 app = Flask(__name__)
 
 @app.route("/")
-def alive():
+def index():
     return "Discord Cloner License Server — OK ✅"
 
 @app.route("/create_key", methods=["POST"])
 def create_key():
     data = request.get_json()
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    # Проверка секрета
     if data.get("secret") != ADMIN_SECRET:
         return jsonify({"error": "Access denied"}), 403
 
     days = data.get("days", 30)
+    if not isinstance(days, int) or days < 1 or days > 365:
+        days = 30
+
     key = generate_key()
     expires_at = (datetime.now() + timedelta(days=days)).isoformat()
 
@@ -43,7 +57,8 @@ def create_key():
         "activated": False,
         "hwid": None,
         "expires_at": expires_at,
-        "license_days": days
+        "license_days": days,
+        "created_at": datetime.now().isoformat()
     }
     save_keys(keys)
 
@@ -51,11 +66,14 @@ def create_key():
         "key": key,
         "expires_at": expires_at,
         "license_days": days
-    })
+    }), 200
 
 @app.route("/activate_key", methods=["POST"])
 def activate_key():
     data = request.get_json()
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+
     key = data.get("key")
     hwid = data.get("hwid")
     if not key or not hwid:
@@ -66,10 +84,10 @@ def activate_key():
         return jsonify({"error": "Invalid key"}), 400
 
     license_data = keys[key]
-    if license_data["activated"] and license_data["hwid"] != hwid:
-        return jsonify({"error": "Key already used on another device"}), 400
-
-    if not license_data["activated"]:
+    if license_data["activated"]:
+        if license_data["hwid"] != hwid:
+            return jsonify({"error": "Key already activated on another device"}), 400
+    else:
         license_data.update({
             "activated": True,
             "hwid": hwid,
@@ -80,13 +98,17 @@ def activate_key():
     return jsonify({
         "expires_at": license_data["expires_at"],
         "license_days": license_data["license_days"]
-    })
+    }), 200
 
 @app.route("/list_keys", methods=["GET"])
 def list_keys():
-    return jsonify(load_keys())
+    return jsonify(load_keys()), 200
 
+# ===========================
+# Запуск
+# ===========================
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))  # ← Render ожидает 10000 по умолчанию
-    app.run(host="0.0.0.0", port=port)
-
+    # Render задаёт PORT автоматически (обычно 10000)
+    port = int(os.environ.get("PORT", 10000))
+    # Обязательно host="0.0.0.0" — иначе Render не достучится
+    app.run(host="0.0.0.0", port=port, debug=False)
