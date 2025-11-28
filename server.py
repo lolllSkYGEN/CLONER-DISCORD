@@ -9,8 +9,8 @@ import os
 # Конфигурация
 # ===========================
 KEYS_FILE = "keys.json"
-# Получаем секрет из переменной окружения (Render задаёт её в Dashboard)
-ADMIN_SECRET = os.getenv("ADMIN_SECRET")  # ✅ ОСТАВЬ ТОЛЬКО ЭТО
+# Читаем секрет из переменной окружения (задаётся в Render Dashboard)
+ADMIN_SECRET = os.getenv("ADMIN_SECRET")
 
 def load_keys():
     if os.path.exists(KEYS_FILE):
@@ -105,11 +105,10 @@ def list_keys():
     return jsonify(load_keys()), 200
 
 # ===========================
-# Запуск
+# Запуск — ОБЯЗАТЕЛЬНО для Render
 # ===========================
 if __name__ == "__main__":
-    # Render задаёт PORT автоматически (обычно 10000)
+    # Render задаёт PORT автоматически (по умолчанию 10000)
     port = int(os.environ.get("PORT", 10000))
     # Обязательно host="0.0.0.0" — иначе Render не достучится
     app.run(host="0.0.0.0", port=port, debug=False)
-
