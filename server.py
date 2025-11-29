@@ -24,7 +24,7 @@ def save_keys(keys):
 
 def generate_key():
     parts = [''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(4)) for _ in range(3)]
-    return "SHARK-" + "-".join(parts)
+    return "CLONE-" + "-".join(parts)
 
 # ===========================
 # Flask App
@@ -112,3 +112,4 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     # Обязательно host="0.0.0.0" — иначе Render не достучится
     app.run(host="0.0.0.0", port=port, debug=False)
+
