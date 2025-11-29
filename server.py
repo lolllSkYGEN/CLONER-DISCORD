@@ -4,14 +4,13 @@ import secrets
 import string
 from datetime import datetime, timedelta
 import os
-import requests
 
 # ===========================
 # Конфигурация
 # ===========================
 KEYS_FILE = "keys.json"
-ADMIN_SECRET = os.getenv("ADMIN_SECRET")  # Задаётся в Render Dashboard
-DISCORD_API = "https://discord.com/api/v9"
+# Читаем секрет из переменной окружения (задаётся в Render Dashboard)
+ADMIN_SECRET = os.getenv("ADMIN_SECRET")
 
 def load_keys():
     if os.path.exists(KEYS_FILE):
@@ -28,23 +27,6 @@ def generate_key():
     return "CLONE-" + "-".join(parts)
 
 # ===========================
-# Вспомогательные функции Discord
-# ===========================
-def get_guild_info(guild_id, token):
-    resp = requests.get(f"{DISCORD_API}/guilds/{guild_id}", headers={"Authorization": token})
-    return resp.json() if resp.status_code == 200 else None
-
-def get_guild_roles(guild_id, token):
-    resp = requests.get(f"{DISCORD_API}/guilds/{guild_id}/roles", headers={"Authorization": token})
-    if resp.status_code == 200:
-        return [r for r in resp.json() if r["name"] != "@everyone"]
-    return []
-
-def get_guild_channels(guild_id, token):
-    resp = requests.get(f"{DISCORD_API}/guilds/{guild_id}/channels", headers={"Authorization": token})
-    return resp.json() if resp.status_code == 200 else []
-
-# ===========================
 # Flask App
 # ===========================
 app = Flask(__name__)
@@ -53,11 +35,14 @@ app = Flask(__name__)
 def index():
     return "Discord Cloner License Server — OK ✅"
 
-# --- Лицензии ---
 @app.route("/create_key", methods=["POST"])
 def create_key():
     data = request.get_json()
-    if not data or data.get("secret") != ADMIN_SECRET:
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    # Проверка секрета
+    if data.get("secret") != ADMIN_SECRET:
         return jsonify({"error": "Access denied"}), 403
 
     days = data.get("days", 30)
@@ -115,56 +100,15 @@ def activate_key():
         "license_days": license_data["license_days"]
     }), 200
 
-@app.route("/validate", methods=["POST"])
-def validate():
-    data = request.get_json()
-    key = data.get("key")
-    hwid = data.get("hwid")
-    keys = load_keys()
-    if key in keys:
-        lic = keys[key]
-        if lic["activated"] and lic["hwid"] == hwid and datetime.now() < datetime.fromisoformat(lic["expires_at"]):
-            return jsonify({"valid": True}), 200
-    return jsonify({"valid": False}), 403
-
-# --- Безопасное клонирование ---
-@app.route("/clone", methods=["POST"])
-def clone_request():
-    data = request.get_json()
-    key = data.get("key")
-    hwid = data.get("hwid")
-    src_guild = data.get("src_guild_id")
-    target_guild = data.get("target_guild_id")
-
-    # Проверка лицензии
-    keys = load_keys()
-    if key not in keys:
-        return jsonify({"error": "Invalid license"}), 403
-    lic = keys[key]
-    if not lic["activated"] or lic["hwid"] != hwid or datetime.now() >= datetime.fromisoformat(lic["expires_at"]):
-        return jsonify({"error": "License expired or invalid"}), 403
-
-    # Здесь можно подключить токен (если решите хранить его на сервере)
-    # Пока клиент отправляет только hash токена — сервер не может получить структуру
-    # Поэтому для демо возвращаем "заглушку" шагов
-
-    # В реальном проекте: раскомментируйте, если токен хранится на сервере
-    # token = get_token_for_key(key)  # <-- ваша функция
-    # roles = get_guild_roles(src_guild, token)
-    # channels = get_guild_channels(src_guild, token)
-
-    # DEMO: возвращаем фиксированный план действий
-    steps = [
-        {"action": "create_category", "data": {"guild_id": target_guild, "name": "Общее"}},
-        {"action": "create_text_channel", "data": {"guild_id": target_guild, "name": "чат", "parent_id": None}},
-        {"action": "create_voice_channel", "data": {"guild_id": target_guild, "name": "Голосовой", "parent_id": None}},
-    ]
-
-    return jsonify({"steps": steps}), 200
+@app.route("/list_keys", methods=["GET"])
+def list_keys():
+    return jsonify(load_keys()), 200
 
 # ===========================
 # Запуск — ОБЯЗАТЕЛЬНО для Render
 # ===========================
 if __name__ == "__main__":
+    # Render задаёт PORT автоматически (по умолчанию 10000)
     port = int(os.environ.get("PORT", 10000))
+    # Обязательно host="0.0.0.0" — иначе Render не достучится
     app.run(host="0.0.0.0", port=port, debug=False)
