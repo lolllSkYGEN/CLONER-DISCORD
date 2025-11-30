@@ -176,7 +176,7 @@ def list_keys():
     return jsonify({k["key"]: dict(k) for k in keys}), 200
 
 # ===========================
-# Запуск
+# Запуск — для Render
 # ===========================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
