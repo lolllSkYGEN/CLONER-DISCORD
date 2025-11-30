@@ -6,17 +6,20 @@ import string
 from datetime import datetime, timedelta
 import os
 
+# ===========================
+# Конфигурация
+# ===========================
 DATABASE_URL = os.getenv("DATABASE_URL")
 ADMIN_SECRET = os.getenv("ADMIN_SECRET")
 
 if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL not set")
+    raise RuntimeError("DATABASE_URL не задан в Environment Variables")
 
-def get_db():
+def get_db_connection():
     return psycopg2.connect(DATABASE_URL, sslmode='require')
 
 def init_db():
-    conn = get_db()
+    conn = get_db_connection()
     cur = conn.cursor()
     cur.execute('''
         CREATE TABLE IF NOT EXISTS licenses (
@@ -28,10 +31,21 @@ def init_db():
             created_at TEXT
         )
     ''')
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS sessions (
+            session_id TEXT PRIMARY KEY,
+            key TEXT NOT NULL,
+            created_at TEXT,
+            FOREIGN KEY (key) REFERENCES licenses(key) ON DELETE CASCADE
+        )
+    ''')
     conn.commit()
     cur.close()
     conn.close()
 
+# ===========================
+# Flask App
+# ===========================
 app = Flask(__name__)
 
 @app.route("/")
@@ -56,7 +70,7 @@ def create_key():
     )
     expires_at = (datetime.now() + timedelta(days=days)).isoformat()
 
-    conn = get_db()
+    conn = get_db_connection()
     cur = conn.cursor()
     cur.execute('''
         INSERT INTO licenses (key, activated, hwid, expires_at, license_days, created_at)
@@ -85,7 +99,7 @@ def activate_key():
     if not key or not hwid:
         return jsonify({"error": "Missing key or HWID"}), 400
 
-    conn = get_db()
+    conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute("SELECT * FROM licenses WHERE key = %s", (key,))
     lic = cur.fetchone()
@@ -100,34 +114,48 @@ def activate_key():
             conn.close()
             return jsonify({"error": "Key already activated on another device"}), 400
     else:
-        cur.execute('UPDATE licenses SET activated = TRUE, hwid = %s WHERE key = %s', (hwid, key))
+        cur.execute('''
+            UPDATE licenses SET activated = TRUE, hwid = %s WHERE key = %s
+        ''', (hwid, key))
         conn.commit()
 
+    # Генерация session_id
+    session_id = secrets.token_urlsafe(32)
+    cur.execute('''
+        INSERT INTO sessions (session_id, key, created_at)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (session_id) DO NOTHING
+    ''', (session_id, key, datetime.now().isoformat()))
+    conn.commit()
     cur.close()
     conn.close()
-    return jsonify({"status": "activated"}), 200
 
-@app.route("/validate", methods=["POST"])
-def validate():
+    return jsonify({"session_id": session_id}), 200
+
+@app.route("/validate_session", methods=["POST"])
+def validate_session():
     init_db()
     data = request.get_json()
-    key = data.get("key")
-    hwid = data.get("hwid")
-    if not key or not hwid:
-        return jsonify({"valid": False, "error": "Missing key or HWID"}), 400
+    session_id = data.get("session_id")
+    if not session_id:
+        return jsonify({"valid": False, "error": "Missing session_id"}), 400
 
-    conn = get_db()
+    conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT * FROM licenses WHERE key = %s", (key,))
+    cur.execute('''
+        SELECT l.* FROM sessions s
+        JOIN licenses l ON s.key = l.key
+        WHERE s.session_id = %s
+    ''', (session_id,))
     lic = cur.fetchone()
     cur.close()
     conn.close()
 
     if not lic:
-        return jsonify({"valid": False, "error": "Invalid key"}), 403
+        return jsonify({"valid": False, "error": "Invalid session"}), 403
     if not lic["activated"]:
         return jsonify({"valid": False, "error": "Key not activated"}), 403
-    if lic["hwid"] != hwid:
+    if lic["hwid"] != None and lic["hwid"] != data.get("hwid", ""):
         return jsonify({"valid": False, "error": "HWID mismatch"}), 403
     if datetime.now() >= datetime.fromisoformat(lic["expires_at"]):
         return jsonify({"valid": False, "error": "License expired"}), 403
@@ -137,6 +165,20 @@ def validate():
         "expires_at": lic["expires_at"]
     }), 200
 
+@app.route("/list_keys", methods=["GET"])
+def list_keys():
+    init_db()
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT * FROM licenses")
+    keys = cur.fetchall()
+    cur.close()
+    conn.close()
+    return jsonify({k["key"]: dict(k) for k in keys}), 200
+
+# ===========================
+# Запуск — для Render
+# ===========================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, debug=False)
